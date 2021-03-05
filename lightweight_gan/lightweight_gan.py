@@ -24,21 +24,19 @@ import torchvision
 from torchvision import transforms
 from kornia import filter2D
 
-from lightweight_gan.diff_augment import DiffAugment
-from lightweight_gan.version import __version__
+from diff_augment import DiffAugment
+from version import __version__
 
 from tqdm import tqdm
 from einops import rearrange, reduce
 
-from adabelief_pytorch import AdaBelief
 from gsa_pytorch import GSA
+from switched_conv import convert_net_to_switched_conv, convert_state_dict_to_switched_conv
 
 # asserts
-
 assert torch.cuda.is_available(), 'You need to have an Nvidia GPU with CUDA installed.'
 
 # constants
-
 NUM_CORES = multiprocessing.cpu_count()
 EXTS = ['jpg', 'jpeg', 'png']
 
@@ -700,12 +698,16 @@ class LightweightGAN(nn.Module):
         freq_chan_attn = False,
         ttur_mult = 1.,
         lr = 2e-4,
+        switched_conv = False,
+        switch_breadth = 4,
         rank = 0,
         ddp = False
     ):
         super().__init__()
         self.latent_dim = latent_dim
         self.image_size = image_size
+        self.switched_conv = switched_conv
+        self.switch_breadth = switch_breadth
 
         G_kwargs = dict(
             image_size = image_size,
@@ -945,6 +947,11 @@ class Trainer():
             self.G_ddp = DDP(self.GAN.G, **ddp_kwargs)
             self.D_ddp = DDP(self.GAN.D, **ddp_kwargs)
             self.D_aug_ddp = DDP(self.GAN.D_aug, **ddp_kwargs)
+
+    def convert_to_switched_conv(self, breadth=4, convert_weights=True):
+        convert_net_to_switched_conv(self.G, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
+        convert_net_to_switched_conv(self.GE, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
+        convert_net_to_switched_conv(self.D, self.switch_breadth, ['residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3', 'residual_layers.2.0.branches.0.3'])
 
     def write_config(self):
         self.config_path.write_text(json.dumps(self.config()))
@@ -1393,3 +1400,19 @@ class Trainer():
             return None
 
         return saved_nums
+
+if __name__ == '__main__':
+    #trainer = Trainer(name='pna2', image_size=256, batch_size=32, switched_conv=True, switch_breadth=4)
+    #trainer.init_GAN()
+
+    #
+    #['residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3',
+    #                              'residual_layers.2.0.branches.0.3']
+    state = torch.load('../results/pna/model_133.pt')
+    st = state['GAN'].copy()
+    state['GAN'] = convert_state_dict_to_switched_conv(state['GAN'], 4, ['G.layers.3.0.2', 'G.layers.4.0.2', 'G.layers.5.0.2', 'G.out_conv',
+                                                                         'GE.layers.3.0.2', 'GE.layers.4.0.2', 'GE.layers.5.0.2', 'GE.out_conv',
+                                                                         'residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3', 'residual_layers.2.0.branches.0.3'
+                                                                        ])
+    st2 = state['GAN']
+    torch.save(state, 'converted.pt')
