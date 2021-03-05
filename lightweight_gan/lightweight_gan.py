@@ -284,7 +284,7 @@ class AugWrapper(nn.Module):
 
 # modifiable global variables
 
-norm_class = nn.BatchNorm2d
+norm_class = nn.GroupNorm
 
 def upsample(scale_factor = 2):
     return nn.Upsample(scale_factor = scale_factor)
@@ -396,7 +396,7 @@ class Generator(nn.Module):
 
         self.initial_conv = nn.Sequential(
             nn.ConvTranspose2d(latent_dim, latent_dim * 2, 4),
-            norm_class(latent_dim * 2),
+            norm_class(4, latent_dim * 2),
             nn.GLU(dim = 1)
         )
 
@@ -447,7 +447,7 @@ class Generator(nn.Module):
                     upsample(),
                     Blur(),
                     nn.Conv2d(chan_in, chan_out * 2, 3, padding = 1),
-                    norm_class(chan_out * 2),
+                    norm_class(2, chan_out * 2),
                     nn.GLU(dim = 1)
                 ),
                 sle,
@@ -917,7 +917,7 @@ class Trainer():
         global norm_class
         global Blur
 
-        norm_class = nn.SyncBatchNorm if self.syncbatchnorm else nn.BatchNorm2d
+        #norm_class = nn.SyncBatchNorm if self.syncbatchnorm else nn.BatchNorm2d
         Blur = nn.Identity if not self.antialias else Blur
 
         # handle bugs when
