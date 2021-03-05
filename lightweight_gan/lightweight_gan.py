@@ -814,6 +814,9 @@ class Trainer():
         world_size = 1,
         log = False,
         amp = False,
+        switched_conv=False,
+        switch_breadth=4,
+        init_swconv = False,
         *args,
         **kwargs
     ):
@@ -894,6 +897,10 @@ class Trainer():
         self.G_scaler = GradScaler(enabled = self.amp)
         self.D_scaler = GradScaler(enabled = self.amp)
 
+        self.switched_conv = switched_conv
+        self.switch_breadth = switch_breadth
+        self.init_swconv = init_swconv
+
     @property
     def image_extension(self):
         return 'jpg' if not self.transparent else 'png'
@@ -941,6 +948,9 @@ class Trainer():
             **kwargs
         )
 
+        if self.switched_conv and self.init_swconv:
+            self.convert_to_switched_conv(self.switch_breadth, False)
+
         if self.is_ddp:
             ddp_kwargs = {'device_ids': [self.rank], 'output_device': self.rank, 'find_unused_parameters': True}
 
@@ -949,9 +959,9 @@ class Trainer():
             self.D_aug_ddp = DDP(self.GAN.D_aug, **ddp_kwargs)
 
     def convert_to_switched_conv(self, breadth=4, convert_weights=True):
-        convert_net_to_switched_conv(self.G, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
-        convert_net_to_switched_conv(self.GE, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
-        convert_net_to_switched_conv(self.D, self.switch_breadth, ['residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3', 'residual_layers.2.0.branches.0.3'])
+        convert_net_to_switched_conv(self.GAN.G, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
+        convert_net_to_switched_conv(self.GAN.GE, self.switch_breadth, ['layers.3.0.2', 'layers.4.0.2', 'layers.5.0.2', 'out_conv'])
+        convert_net_to_switched_conv(self.GAN.D, self.switch_breadth, ['residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3', 'residual_layers.2.0.branches.0.3'])
 
     def write_config(self):
         self.config_path.write_text(json.dumps(self.config()))
@@ -1361,7 +1371,7 @@ class Trainer():
         torch.save(save_data, self.model_name(num))
         self.write_config()
 
-    def load(self, num=-1, print_version=True):
+    def load(self, num=-1, print_version=True, strict=True):
         self.load_config()
 
         name = num
@@ -1382,7 +1392,7 @@ class Trainer():
             print(f"loading from version {load_data['version']}")
 
         try:
-            self.GAN.load_state_dict(load_data['GAN'])
+            self.GAN.load_state_dict(load_data['GAN'], strict=strict)
         except Exception as e:
             print('unable to load save model. please try downgrading the package to the version specified by the saved model')
             raise e
@@ -1408,6 +1418,8 @@ if __name__ == '__main__':
     #
     #['residual_layers.0.0.branches.0.3', 'residual_layers.1.0.branches.0.3',
     #                              'residual_layers.2.0.branches.0.3']
+
+    '''
     state = torch.load('../results/pna/model_133.pt')
     st = state['GAN'].copy()
     state['GAN'] = convert_state_dict_to_switched_conv(state['GAN'], 4, ['G.layers.3.0.2', 'G.layers.4.0.2', 'G.layers.5.0.2', 'G.out_conv',
@@ -1416,3 +1428,4 @@ if __name__ == '__main__':
                                                                         ])
     st2 = state['GAN']
     torch.save(state, 'converted.pt')
+    '''

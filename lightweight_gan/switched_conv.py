@@ -8,6 +8,7 @@ from lambda_networks import LambdaLayer
 from torch.nn import init, Conv2d, MSELoss, ZeroPad2d
 from tqdm import tqdm
 import torch.distributed as dist
+import torch.nn.functional as F
 
 
 def SwitchedConvRoutingNormal(input, selector, weight, bias, stride=1):
@@ -294,20 +295,16 @@ def convert_net_to_switched_conv(module, switch_breadth, allow_list, dropout_rat
     for modpath in full_paths:
         mod = module
         for sub in modpath[:-1]:
-            pmod = mod
             mod = getattr(mod, sub)
         old_conv = getattr(mod, modpath[-1])
         new_conv = SwitchedConvHardRouting('.'.join(modpath), old_conv.in_channels, old_conv.out_channels, old_conv.kernel_size[0], switch_breadth, old_conv.stride[0], old_conv.bias is not None,
                                            include_coupler=True, dropout_rate=dropout_rate, coupler_mode=coupler_mode)
         new_conv = new_conv.to(old_conv.weight.device)
         assert old_conv.dilation == 1 or old_conv.dilation == (1,1) or old_conv.dilation is None
-        if isinstance(mod, nn.Sequential):
+        if isinstance(mod, nn.Sequential) or isinstance(mod, nn.ModuleList):
             # If we use the standard logic (in the else case) here, it reorders the sequential.
-            # Instead, extract the OrderedDict from the current sequential, replace the Conv inside that dict, then replace the entire sequential to keep the order.
-            emods = mod._modules
-            emods[modpath[-1]] = new_conv
-            delattr(pmod, modpath[-2])
-            pmod.add_module(modpath[-2], nn.Sequential(emods))
+            # Instead, extract the OrderedDict from the current sequential and edit that.
+            mod._modules[modpath[-1]] = new_conv
         else:
             delattr(mod, modpath[-1])
             mod.add_module(modpath[-1], new_conv)

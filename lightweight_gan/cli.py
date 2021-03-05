@@ -6,7 +6,7 @@ from tqdm import tqdm
 from datetime import datetime
 from functools import wraps
 from lightweight_gan import Trainer, NanException
-from lightweight_gan.diff_augment_test import DiffAugmentTest
+from diff_augment_test import DiffAugmentTest
 
 import torch
 import torch.multiprocessing as mp
@@ -35,7 +35,7 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-def run_training(rank, world_size, model_args, data, load_from, new, num_train_steps, name, seed):
+def run_training(rank, world_size, model_args, data, load_from, new, num_train_steps, name, seed, strict=True):
     is_main = rank == 0
     is_ddp = world_size > 1
 
@@ -56,7 +56,7 @@ def run_training(rank, world_size, model_args, data, load_from, new, num_train_s
     model = Trainer(**model_args)
 
     if not new:
-        model.load(load_from)
+        model.load(load_from, strict=strict)
     else:
         model.clear()
 
@@ -112,6 +112,9 @@ def train_from_folder(
     seed = 42,
     amp = False,
     show_progress = False,
+    switch_breadth = None,
+    init_swconv = False,
+    strict_model_load=True,
 ):
     num_image_tiles = default(num_image_tiles, 4 if image_size > 512 else 8)
 
@@ -141,7 +144,10 @@ def train_from_folder(
         calculate_fid_every = calculate_fid_every,
         calculate_fid_num_images = calculate_fid_num_images,
         clear_fid_cache = clear_fid_cache,
-        amp = amp
+        amp = amp,
+        switched_conv = switch_breadth is not None,
+        switch_breadth = switch_breadth,
+        init_swconv = init_swconv
     )
 
     if generate:
@@ -173,13 +179,13 @@ def train_from_folder(
     world_size = torch.cuda.device_count()
 
     if world_size == 1 or not multi_gpus:
-        run_training(0, 1, model_args, data, load_from, new, num_train_steps, name, seed)
+        run_training(0, 1, model_args, data, load_from, new, num_train_steps, name, seed, strict=strict_model_load)
         return
 
     mp.spawn(run_training,
-        args=(world_size, model_args, data, load_from, new, num_train_steps, name, seed),
+        args=(world_size, model_args, data, load_from, new, num_train_steps, name, seed, strict_model_load),
         nprocs=world_size,
         join=True)
 
-def main():
+if __name__ == '__main__':
     fire.Fire(train_from_folder)
