@@ -2,13 +2,12 @@ import math
 import os
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from lambda_networks import LambdaLayer
-from torch.nn import init, Conv2d, MSELoss, ZeroPad2d
-from tqdm import tqdm
-import torch.distributed as dist
-import torch.nn.functional as F
+from torch.nn import init, Conv2d, ZeroPad2d
 
 
 def SwitchedConvRoutingNormal(input, selector, weight, bias, stride=1):
@@ -40,7 +39,7 @@ class SwitchedConvHardRoutingFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gradIn):
-        #import pydevd
+        #import pydevd   # Uncomment to allow debugging inside this function.
         #pydevd.settrace(suspend=False, trace_only_current_thread=True)
         input, output, mask, weight, bias = ctx.saved_tensors
         gradIn = gradIn
@@ -60,6 +59,15 @@ class SwitchedConvHardRoutingFunction(torch.autograd.Function):
         return grad, grad_sel, grad_w, grad_b, None
 
 
+"""
+Creates a hard routing attention tensor which properly routes gradients in the backwards pass. 
+
+Accomplished by finding the argmax of the elements in the input (across dim=1) and setting those elements to 1. All 
+others are set to 0. 
+
+In the backwards pass, the gradient is fed directly to the elements set to 1 only. The gradients for those elements are 
+scaled by the original input value (as if the stepwise function setting the inputs to 1 didn't happen).
+"""
 class RouteTop1(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
@@ -84,7 +92,7 @@ class RouteTop1(torch.autograd.Function):
 
 
 """
-SwitchNorm is meant to be applied against the Softmax output of an switching function across a large set of
+SwitchNorm is meant to be applied against the Softmax output of a switching function across a large set of
 switch computations. It is meant to promote an equal distribution of switch weights by decreasing the magnitude
 of switch weights that are over-used and increasing the magnitude of under-used weights.
 
@@ -103,7 +111,8 @@ You should set accumulator size according to two factors:
 - How wide your switch/switching group size is. More groups mean you're going to want more accumulation.
 
 Note: This norm makes the (potentially flawed) assumption that each forward() pass has unique data. For maximum 
-      effectiveness, avoid doing this - or make alterations to work around it.
+      effectiveness, avoid performing regular, repeated forward passes with the same data - or make alterations to work 
+      around it.
 Note: This norm does nothing for the first <accumulator_size> iterations.
 """
 class SwitchNorm(nn.Module):
@@ -177,7 +186,7 @@ class SwitchedConvHardRouting(nn.Module):
                  stride=1,
                  bias=True,
                  dropout_rate=0.0,
-                 include_coupler: bool = False,  # A 'coupler' is a latent converter which can make any bxcxhxw tensor a compatible switchedconv selector by performing a linear 1x1 conv, softmax and interpolate.
+                 include_coupler: bool = False,  # A 'coupler' is a latent converter which can transforms the input into a switch selector. For large networks using many SwitchedConvs, it is recommended to provide an external coupler.
                  coupler_mode: str = 'standard',
                  coupler_dim_in: int = 0,
                  hard_en=True):  # A test switch that, when used in 'emulation mode' (where all convs are calculated using torch functions) computes soft-attention instead of hard-attention.
@@ -287,9 +296,6 @@ class SwitchedConvHardRouting(nn.Module):
 # Given a state_dict and the module that that sd belongs to, strips out the specified Conv2d modules and replaces them
 # with equivalent switched_conv modules.
 def convert_net_to_switched_conv(module, switch_breadth, allow_list, dropout_rate=0.4, coupler_mode='lambda'):
-    print("CONVERTING MODEL TO SWITCHED_CONV MODE")
-
-    # Next, convert the model itself:
     full_paths = [n.split('.') for n in allow_list]
     for modpath in full_paths:
         mod = module
@@ -313,10 +319,44 @@ def convert_state_dict_to_switched_conv(sd, switch_breadth, allow_list):
     for cname in allow_list:
         for sn in sd.keys():
             if cname in sn and sn.endswith('weight'):
+                # If you are getting an error here - it's likely you are trying to convert the weights for a model that has already been converted! If using SwitchedConvConversionWrapper, this can also mean that the state_dict you provided is not compatible with the converted model.
                 sd[sn] = sd[sn].unsqueeze(2).repeat(1,1,switch_breadth,1,1)
                 converted += 1
     print(f"Converted {converted} parameters.")
     return sd
+
+
+class SwitchedConvConversionWrapper:
+    def __init__(self, wrap_module, breadth, allow_list, coupler_mode='lambda', dropout_rate=0.4):
+        self.wrapped_module = wrap_module
+        self.breadth = breadth
+        self.coupler_mode = coupler_mode
+        self.allow_list = allow_list
+        convert_net_to_switched_conv(self.wrapped_module, switch_breadth=breadth, allow_list=allow_list, coupler_mode=coupler_mode, dropout_rate=dropout_rate)
+
+    def load_state_dict(self, state_dict, suppress_autoconvert_weights=False, strict = True):
+        # We need to handle two cases here:
+        # 1) The provided weights are for the unconverted model. We detect this by catching an exception from the torch
+        #    implementation.
+        # 2) The provided weights are for a converted model. We assume this at first.
+        try:
+            self.wrapped_module.load_state_dict(state_dict, strict)
+        except RuntimeError as e:
+            if not suppress_autoconvert_weights and 'Missing key(s) in state_dict' in e.__str__():
+                print("SwitchedConvConversionWrapper.load_state_dict: Automatically converting provided weights for use with switched_conv. Note: all state dict mismatch errors will be suppressed! Be absolutely sure this state_dict is the one you want!")
+                converted = convert_state_dict_to_switched_conv(state_dict, self.breadth, self.allow_list)
+                self.wrapped_module.load_state_dict(converted, strict=False)  # strict=False required because coupler parameters are not converted and will not be in the converted state dict.
+            else:
+                raise e
+
+    # Allow clients to pass through this wrapper to access the wrapped module.
+    def __getattr__(self, item):
+        if item != 'wrapped_module' and item != 'load_state_dict' and hasattr(self.wrapped_module, item):
+            return getattr(self.wrapped_module, item)
+        raise AttributeError(f"Requested attribute {item} does not exist in SwitchedConvConversionWrapper or wrapped object.")
+
+    def __call__(self, *args, **kwargs):
+        return self.wrapped_module(*args, **kwargs)
 
 
 if __name__ == '__main__':
