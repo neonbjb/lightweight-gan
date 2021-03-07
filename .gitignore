@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+lightweight_gan/runs/
+lightweight_gan/models/
+lightweight_gan/fid/
+lightweight_gan/results/
+lightweight_gan/work_dirs/
