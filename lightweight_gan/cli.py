@@ -60,12 +60,12 @@ def run_training(rank, world_size, model_args, data, load_from, new, num_train_s
     else:
         model.clear()
 
-    model.set_data_src(data)
+    model.set_data_src(data, f'{data}/../val')
 
-    for _ in tqdm(range(num_train_steps - model.steps), initial = model.steps, total = num_train_steps, mininterval=10., desc=f'{name}<{data}>'):
+    for step in tqdm(range(num_train_steps - model.steps), initial = model.steps, total = num_train_steps, desc=f'{name}<{data}>'):
         retry_call(model.train, tries=3, exceptions=NanException)
-        if is_main and _ % 50 == 0:
-            model.print_log()
+        if is_main and step % 50 == 0:
+            model.print_log(step)
 
     model.save(model.checkpoint_num)
 

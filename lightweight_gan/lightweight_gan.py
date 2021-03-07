@@ -21,6 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from PIL import Image
 import torchvision
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from kornia import filter2D
 
@@ -949,10 +950,13 @@ class Trainer():
             **kwargs
         )
 
+        self.tensorboard = SummaryWriter()
+        self.last_step = 0
+
         if self.switched_conv and self.init_swconv:
-            self.GAN = SwitchedConvConversionWrapper(self.GAN, 4, ['G.layers.3.0.2', 'G.layers.4.0.2', 'G.layers.5.0.2', 'G.out_conv',
-                                                                         'GE.layers.3.0.2', 'GE.layers.4.0.2', 'GE.layers.5.0.2', 'GE.out_conv',
-                                                                         'D.residual_layers.0.0.branches.0.3', 'D.residual_layers.1.0.branches.0.3', 'D.residual_layers.2.0.branches.0.3'
+            self.GAN = SwitchedConvConversionWrapper(self.GAN, 4, ['G.layers.3.0.2', 'G.layers.4.0.2', 'G.out_conv', # 'G.layers.5.0.2',
+                                                                         'GE.layers.3.0.2', 'GE.layers.4.0.2', 'GE.out_conv', # 'GE.layers.5.0.2',
+                                                                         'D.residual_layers.0.0.branches.0.3', 'D.residual_layers.1.0.branches.0.3', #'D.residual_layers.2.0.branches.0.3'
                                                                         ], coupler_mode='standard')
 
         if self.is_ddp:
@@ -988,15 +992,21 @@ class Trainer():
             'disc_output_size': self.disc_output_size,
             'optimizer': self.optimizer,
             'attn_res_layers': self.attn_res_layers,
-            'freq_chan_attn': self.freq_chan_attn
+            'freq_chan_attn': self.freq_chan_attn,
+            'fmap_max': self.fmap_max
         }
 
-    def set_data_src(self, folder):
+    def set_data_src(self, folder, fid_folder=None):
         num_workers = default(self.num_workers, math.ceil(NUM_CORES / self.world_size))
         self.dataset = ImageDataset(folder, self.image_size, transparent = self.transparent, greyscale = self.greyscale, aug_prob = self.dataset_aug_prob)
         sampler = DistributedSampler(self.dataset, rank=self.rank, num_replicas=self.world_size, shuffle=True) if self.is_ddp else None
         dataloader = DataLoader(self.dataset, num_workers = num_workers, batch_size = math.ceil(self.batch_size / self.world_size), sampler = sampler, shuffle = not self.is_ddp, drop_last = True, pin_memory = True)
         self.loader = cycle(dataloader)
+        if fid_folder is not None:
+            self.fid_dataset = ImageDataset(folder, self.image_size, transparent = self.transparent, greyscale = self.greyscale, aug_prob = self.dataset_aug_prob)
+            sampler = DistributedSampler(self.dataset, rank=self.rank, num_replicas=self.world_size, shuffle=True) if self.is_ddp else None
+            dataloader = DataLoader(self.dataset, num_workers = num_workers, batch_size = math.ceil(self.batch_size / self.world_size), sampler = sampler, shuffle = not self.is_ddp, drop_last = True, pin_memory = True)
+            self.fid_loader = cycle(dataloader)
 
         # auto set augmentation prob for user if dataset is detected to be low
         num_samples = len(self.dataset)
@@ -1261,7 +1271,8 @@ class Trainer():
             os.makedirs(real_path)
 
             for batch_num in tqdm(range(num_batches), desc='calculating FID - saving reals'):
-                real_batch = next(self.loader)
+                loader = self.fid_loader if hasattr(self, 'fid_loader') else self.loader
+                real_batch = next(loader)
                 for k, image in enumerate(real_batch.unbind(0)):
                     ind = k + batch_num * self.batch_size
                     torchvision.utils.save_image(image, real_path / f'{ind}.png')
@@ -1288,7 +1299,9 @@ class Trainer():
                 ind = j + batch_num * self.batch_size
                 torchvision.utils.save_image(image, str(fake_path / f'{str(ind)}-ema.{ext}'))
 
-        return fid_score.calculate_fid_given_paths([str(real_path), str(fake_path)], 256, latents.device, 2048)
+        score = fid_score.calculate_fid_given_paths([str(real_path), str(fake_path)], 256, latents.device, 2048)
+        self.tensorboard.add_scalar('val_fid', score, self.last_step)
+        return score
 
     @torch.no_grad()
     def generate_(self, G, style, num_image_tiles = 8):
@@ -1332,7 +1345,7 @@ class Trainer():
             for ind, frame in enumerate(frames):
                 frame.save(str(folder_path / f'{str(ind)}.{ext}'))
 
-    def print_log(self):
+    def print_log(self, step):
         data = [
             ('G', self.g_loss),
             ('D', self.d_loss),
@@ -1344,6 +1357,10 @@ class Trainer():
         data = [d for d in data if exists(d[1])]
         log = ' | '.join(map(lambda n: f'{n[0]}: {n[1]:.2f}', data))
         print(log)
+
+        for k, v in data:
+            self.tensorboard.add_scalar(k, v, step)
+        self.last_step = step
 
     def model_name(self, num):
         return str(self.models_dir / self.name / f'model_{num}.pt')
