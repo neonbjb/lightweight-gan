@@ -956,8 +956,8 @@ class Trainer():
         if self.switched_conv and self.init_swconv:
             self.GAN = SwitchedConvConversionWrapper(self.GAN, 4, ['G.layers.3.0.2', 'G.layers.4.0.2', 'G.out_conv', # 'G.layers.5.0.2',
                                                                          'GE.layers.3.0.2', 'GE.layers.4.0.2', 'GE.out_conv', # 'GE.layers.5.0.2',
-                                                                         'D.residual_layers.0.0.branches.0.3', 'D.residual_layers.1.0.branches.0.3', #'D.residual_layers.2.0.branches.0.3'
-                                                                        ], coupler_mode='standard')
+                                                                         #'D.residual_layers.0.0.branches.0.3', 'D.residual_layers.1.0.branches.0.3', #'D.residual_layers.2.0.branches.0.3'
+                                                                        ], coupler_mode='lambda')
 
         if self.is_ddp:
             ddp_kwargs = {'device_ids': [self.rank], 'output_device': self.rank, 'find_unused_parameters': True}

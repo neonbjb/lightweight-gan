@@ -214,10 +214,7 @@ class SwitchedConvHardRouting(nn.Module):
                                              nn.ReLU(),
                                              Conv2d(breadth, breadth, 1, stride=self.stride))
             elif coupler_mode == 'lambda2':
-                self.coupler = nn.Sequential(nn.Conv2d(coupler_dim_in, coupler_dim_in, 1),
-                                             nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
-                                             nn.ReLU(),
-                                             LambdaLayer(dim=coupler_dim_in, dim_out=coupler_dim_in, r=23, dim_k=16, heads=2, dim_u=1),
+                self.coupler = nn.Sequential(LambdaLayer(dim=coupler_dim_in, dim_out=coupler_dim_in, r=23, dim_k=16, heads=2, dim_u=1),
                                              nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
                                              nn.ReLU(),
                                              LambdaLayer(dim=coupler_dim_in, dim_out=breadth, r=23, dim_k=16, heads=2, dim_u=1),
@@ -271,7 +268,7 @@ class SwitchedConvHardRouting(nn.Module):
         selector = self.gate(selector)
 
         # Debugging variables
-        if self.step_count % 50 == 0:
+        if self.step_count % 200 == 0:
             os.makedirs('work_dirs/sw_debug', exist_ok=True)
             self.save_attention_to_image_rgb(os.path.join('work_dirs/sw_debug', "%s_selector_%i.png" % (self.name, self.step_count)), selector.detach().clone(), self.breadth)
         self.step_count += 1
