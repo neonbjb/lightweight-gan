@@ -207,9 +207,7 @@ class SwitchedConvHardRouting(nn.Module):
             if coupler_mode == 'standard':
                 self.coupler = Conv2d(coupler_dim_in, breadth, kernel_size=1, stride=self.stride)
             elif coupler_mode == 'lambda':
-                self.coupler = nn.Sequential(nn.Conv2d(coupler_dim_in, coupler_dim_in, 1),
-                                             nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
-                                             nn.ReLU(),
+                self.coupler = nn.Sequential(nn.GroupNorm(num_groups=2, num_channels=coupler_dim_in),
                                              LambdaLayer(dim=coupler_dim_in, dim_out=breadth, r=23, dim_k=16, heads=2, dim_u=1),
                                              nn.ReLU(),
                                              Conv2d(breadth, breadth, 1, stride=self.stride))
