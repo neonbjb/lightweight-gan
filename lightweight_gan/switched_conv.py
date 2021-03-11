@@ -221,7 +221,7 @@ class SwitchedConvHardRouting(nn.Module):
                                              Conv2d(breadth, breadth, 1, stride=self.stride))
         else:
             self.coupler = None
-        self.gate = HardRoutingGate(breadth, hard_en=True)
+        self.gate = HardRoutingGate(breadth, hard_en=False)
         self.hard_en = hard_en
 
         self.weight = nn.Parameter(torch.empty(out_c, in_c, breadth, kernel_sz, kernel_sz))
