@@ -1382,7 +1382,8 @@ class Trainer():
             'version': __version__,
             'G_scaler': self.G_scaler.state_dict(),
             'D_scaler': self.D_scaler.state_dict(),
-            'opt': self.optimizer.state_dict()
+            'optD': self.GAN.D_opt.state_dict(),
+            'optG': self.GAN.G_opt.state_dict()
         }
 
         torch.save(save_data, self.model_name(num))
@@ -1418,8 +1419,10 @@ class Trainer():
             self.G_scaler.load_state_dict(load_data['G_scaler'])
         if 'D_scaler' in load_data:
             self.D_scaler.load_state_dict(load_data['D_scaler'])
-        if 'opt' in load_data:
-            self.optimizer.load_state_dict(load_data['opt'])
+        if 'optG' in load_data:
+            self.GAN.G_opt.load_state_dict(load_data['optG'])
+        if 'optD' in load_data:
+            self.GAN.D_opt.load_state_dict(load_data['optD'])
 
     def get_checkpoints(self):
         file_paths = [p for p in Path(self.models_dir / self.name).glob('model_*.pt')]
